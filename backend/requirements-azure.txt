@@ -1,0 +1,9 @@
+azure-storage-blob>=12.22,<13
+azure-storage-queue>=12.12,<13
+azure-cosmos>=4.9,<5
+azure-identity>=1.19,<2
+azure-ai-documentintelligence>=1.0,<2
+azure-ai-textanalytics>=5.3,<6
+azure-functions>=1.21,<2
+openai>=1.60,<3
+PyJWT[crypto]>=2.9,<3
