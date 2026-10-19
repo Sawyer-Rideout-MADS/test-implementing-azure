@@ -1,0 +1,22 @@
+# Azure migration deployment runbook
+
+## Status
+Azure providers, API container entrypoint, queue-trigger worker and Entra PKCE/JWT paths have been implemented. This is **not a verified cloud deployment**. Provisioning and end-to-end testing in your tenant remain required. Existing AWS files are retained for reference, but Azure mode does not use AWS providers (except shared pure input validation helpers).
+
+## Provision
+1. Select an Azure region that supports your Azure OpenAI deployment, Document Intelligence and Azure AI Language. Azure for Students subscriptions may restrict these products and regions. Check quota and permissions first.
+2. `az login`, `az group create -n <rg> -l <region>`, then deploy `infra-azure/main.bicep` as shown in its README. Prefix must yield globally unique Storage, ACR and Cosmos names.
+3. Create an Azure AI Document Intelligence resource, an Azure AI Language resource with PII detection enabled, and an Azure OpenAI resource with a compatible chat model deployment. Set the endpoint/key/deployment settings in `backend/.env.azure.example`.
+4. Create **two** Microsoft Entra app registrations: a SPA with authorization code + PKCE and its precise frontend redirect URI, and an API registration exposing delegated scope `review`. Grant the SPA access to that API scope. Set the SPA variables in `frontend/.env.azure.example` and API tenant/audience in backend settings. Backend requires an access token with the `review` scope. If your access-token `aud` claim is the API client GUID instead of `api://...`, configure `AZURE_API_AUDIENCE` to the exact issued audience. Use a supported Entra tenant; external customers may need Entra External ID.
+5. Configure Blob service CORS to allow your frontend origin, methods PUT and OPTIONS, headers `x-ms-blob-type` and `Content-Type`, and appropriate response headers. Never make the container public. The current implementation signs 5-minute write SAS tokens using the storage account key; use Key Vault or secret references to protect that connection string. Uploaded PDFs are limited to 5 MiB and validated on confirmation.
+6. Build backend: `az acr build --registry <registry> --image clearpath-api:1 --file backend/Dockerfile.azure backend`. Create an Azure Container App in the Bicep-created environment with external ingress port 8000, image from ACR and `APP_MODE=azure`. Configure ACR pull via managed identity or appropriate registry credentials. Inject backend settings as **secrets**; do not commit `.env` files.
+7. Create an Azure Functions Python v2 app (Python 3.11) with Azure Storage Queue extension, `AzureWebJobsStorage` and matching backend Azure environment variables. Deploy `backend/azure_worker/function_app.py` with the `backend/app` package on its Python path. For example, stage `function_app.py`, `host.json`, `requirements.txt` and the `app/` package at the Functions project root, then deploy using Azure Functions Core Tools. Do not use `backend/azure_worker/requirements.txt` as-is after staging: replace it with a root requirements file containing the combined backend dependencies. Keep the worker queue name equal to `AZURE_QUEUE_NAME`.
+8. Deploy frontend as an Azure Static Web App with app location `frontend`, build output `dist`, and frontend Azure environment variables supplied at **build time**. Configure `CORS_ALLOWED_ORIGINS` on the API with the exact Static Web App URL. Set `VITE_API_BASE_URL` to the API URL.
+9. Verify login, API JWT enforcement (missing/wrong token returns 401), create case, upload PDF using SAS PUT, confirm upload, run analysis, poll job completion, review findings, memory and document retrieval. Verify PII masking and failure-closed behavior. Test with **synthetic documents only** until privacy/security review is complete.
+
+## Notes
+- Cosmos DB partition key is `/id`; case records and the memory singleton use their own IDs. Writes use optimistic ETag checks.
+- Storage, Cosmos, Azure AI and OpenAI incur costs. Resource provisioning and model deployment are not automatic.
+- Queue-trigger retry/poison queue handling and job leases must be observed in production. The worker uses the existing claim/finish workflow.
+- Existing AWS tests are preserved as legacy regression tests. Azure live integration and security tests are required before production use.
+- This migration does not copy existing AWS data. Export/import and identity migration are separate, sensitive operational tasks.
